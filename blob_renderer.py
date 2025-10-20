@@ -5,6 +5,7 @@ BlobRenderer - Handles all 3D rendering logic for the chaotic blob
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPainter, QBrush, QColor, QPen, QPainterPath, QRadialGradient, QLinearGradient
 import math
+import time
 from opensimplex import OpenSimplex
 
 
@@ -29,6 +30,56 @@ class BlobRenderer:
         # Store current state and face position
         self.state = 'idle'
         self.face_pos = (0.5, 0.5)
+        
+        # Eye tip positions for blob protection
+        self.left_eye_tip_x = 0
+        self.left_eye_tip_y = 0
+        self.right_eye_tip_x = 0
+        self.right_eye_tip_y = 0
+        
+    def get_eye_protection_points(self, w, h):
+        """Get eye tip positions for blob protection"""
+        cx = w / 2
+        cy = h / 2
+        eye_spacing = w * 0.2
+        eye_y_offset = -h * 0.05
+
+        left_tip = (cx - eye_spacing * 0.65, cy + eye_y_offset - h * 0.02)
+        right_tip = (cx + eye_spacing * 0.65, cy + eye_y_offset - h * 0.02)
+        
+        return [
+            left_tip,
+            right_tip
+        ]
+
+    # --- Noise protection + eye motion helpers ---
+    
+    def eye_safe_amplitude(self, x, y, amplitude, eye_tips, protection_radius):
+        """
+        Reduce deformation amplitude near the eyes so the blob doesn't stretch inward there.
+        eye_tips: list of (x, y) coordinates of the eyes' outermost tips.
+        """
+        for tip in eye_tips:
+            dx = x - tip[0]
+            dy = y - tip[1]
+            dist = math.hypot(dx, dy)
+            if dist < protection_radius:
+                fade = dist / protection_radius
+                amplitude *= fade ** 2  # Stronger damping for debugging
+        return amplitude
+
+    def get_eye_offset(self, tip_pos, noise_scale, noise_strength, t):
+        """
+        Returns a small (x, y) offset for the eye based on blob noise motion.
+        Makes it feel like the eye is glued to the blob surface.
+        """
+        nx = tip_pos.x() * noise_scale
+        ny = tip_pos.y() * noise_scale
+
+        offset_x = self.noise_gen.noise2(x=nx, y=t) * noise_strength
+        offset_y = self.noise_gen.noise2(x=ny, y=t + 50.0) * noise_strength  # offset seed for variety
+
+        return offset_x, offset_y
 
     def get_state_color(self, state):
         """Get the base color for a given state"""
@@ -199,57 +250,6 @@ class BlobRenderer:
         painter.setBrush(QBrush(gradient))
         painter.drawPath(path)
 
-    # --- NEW HELPER METHOD ---
-    # --- Math Samplers ---
-    def upper_inner_point(self, length, height, t, A1=1.0, p1=1.6, s1=0.6, B1=0.06, q1=1.8):
-        x = length * t
-        y = - height * (A1 * (math.sin(math.pi * t) ** p1) * (1 - s1 * t) + B1 * (t ** q1))
-        return x, y
-
-    def upper_outer_point(self, length, height, t, flame_amp=0.035, flame_freq=6, phase=0.0, A2=0.95, p2=1.1, s2=0.25):
-        x = length * t
-        base = A2 * (math.sin(math.pi * t) ** p2) * (1 - s2 * (1 - t))
-        flame = flame_amp * math.sin(flame_freq * math.pi * t + phase) * (1 - t)  # fade to tip
-        y = - height * (base + flame)
-        return x, y
-
-    def lower_outer_point(self, length, height, t, C2=0.45, r2=0.6, p4=1.6, e1=0.15, e2=0.85):
-        x = length * t
-        y = height * (C2 * (math.sin(math.pi * t * r2) ** p4) * (e1 + e2 * t))
-        return x, y
-
-    def lower_inner_point(self, length, height, t, C1=0.35, r1=0.9, p3=1.2, d1=0.25, d2=0.6):
-        x = length * t
-        y = height * (C1 * (math.sin(math.pi * t * r1) ** p3) * (d1 + d2 * t))
-        return x, y
-
-    # --- Catmull-Rom to Cubic Bezier conversion helper ---
-    def catmull_rom_to_beziers(self, pts):
-        """Convert a list of points (tuples) into a list of cubicTo control triples.
-           Returns list of (c1, c2, p) where c1,c2,p are points (x,y)."""
-        beziers = []
-        n = len(pts)
-        if n < 4:
-            # fallback to line segments if too few points
-            for i in range(1, n):
-                beziers.append((pts[i-1], pts[i-1], pts[i]))
-            return beziers
-
-        # For tension = 0.5 (standard Catmull-Rom)
-        for i in range(1, n - 2):
-            p0 = pts[i - 1]
-            p1 = pts[i]
-            p2 = pts[i + 1]
-            p3 = pts[i + 2]
-
-            # control points
-            c1x = p1[0] + (p2[0] - p0[0]) / 6.0
-            c1y = p1[1] + (p2[1] - p0[1]) / 6.0
-            c2x = p2[0] - (p3[0] - p1[0]) / 6.0
-            c2y = p2[1] - (p3[1] - p1[1]) / 6.0
-
-            beziers.append(((c1x, c1y), (c2x, c2y), (p2[0], p2[1])))
-        return beziers
 
     # --- Build QPainterPath from samplers ---
     def build_bezier_symbiote_eye(self, length, height):
@@ -282,16 +282,6 @@ class BlobRenderer:
         p.closeSubpath()
         return p
 
-    def draw_debug_controls(self, painter, path, color=QColor(255,0,0,180)):
-        """Stroke path and draw its control points roughly (for debugging)."""
-        painter.save()
-        # outline stroke
-        pen = QPen(color)
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(path)
-        painter.restore()
 
     def _draw_symbiote_eyes(self, painter):
         """Draws Venom-style eyes using cubic Bézier curves."""
@@ -319,6 +309,15 @@ class BlobRenderer:
         tracking_x = look_x * (w * 0.02)
         tracking_y = look_y * (h * 0.01)
         
+        # Eye tip positions for blob glue effect
+        t = time.time() * 0.5  # Animation timer
+        left_eye_tip = QPointF(cx - eye_spacing, cy + eye_y_offset)
+        right_eye_tip = QPointF(cx + eye_spacing, cy + eye_y_offset)
+        
+        # Sticky offsets (blob glue effect)
+        left_offset = self.get_eye_offset(left_eye_tip, 0.01, 8.0, t)
+        right_offset = self.get_eye_offset(right_eye_tip, 0.01, 8.0, t)
+        
         # Create eye path using Bézier curves
         eye = self.build_bezier_symbiote_eye(eye_length, eye_height)
         rect = eye.boundingRect()
@@ -330,20 +329,32 @@ class BlobRenderer:
         
         # Draw Left Eye (rotate around eye's own center so spacing doesn't affect tilt)
         painter.save()
-        painter.translate(cx - eye_spacing + tracking_x, cy + eye_y_offset + tracking_y)
+        painter.translate(cx - eye_spacing + tracking_x + left_offset[0], 
+                         cy + eye_y_offset + tracking_y + left_offset[1])
         painter.translate(pivot)
         painter.rotate(50)  # inward tilt for aggression
         painter.translate(-pivot)
+        
+        # Subtle breathing motion
+        scale_factor = 1.0 + math.sin(t * 2.0) * 0.02
+        painter.scale(scale_factor, scale_factor)
+        
         painter.drawPath(eye)
         painter.restore()
         
         # Draw Right Eye (mirrored; rotate around the same local pivot)
         painter.save()
-        painter.translate(cx + eye_spacing + tracking_x, cy + eye_y_offset + tracking_y)
+        painter.translate(cx + eye_spacing + tracking_x + right_offset[0], 
+                         cy + eye_y_offset + tracking_y + right_offset[1])
         painter.scale(-1, 1)  # mirror horizontally
         painter.translate(pivot)
         painter.rotate(50)     # inward tilt for aggression
         painter.translate(-pivot)
+        
+        # Subtle breathing motion
+        scale_factor = 1.0 + math.sin(t * 2.0) * 0.02
+        painter.scale(scale_factor, scale_factor)
+        
         painter.drawPath(eye)
         painter.restore()
         

@@ -99,7 +99,19 @@ class AmbientWindow(QWidget):
             
             # Combine noise layers
             total_noise = (noise_value1 * 0.6) + (noise_value2 * 0.3) + (noise_value3 * 0.1)
-            radius += total_noise * 25  # Smaller deformation for ambient orb
+            
+            # Get eye protection points
+            eye_tips = self.renderer.get_eye_protection_points(self.width(), self.height())
+            
+            # Apply eye protection to reduce deformation near eyes
+            amplitude = 25  # Smaller deformation for ambient orb
+            protected_amplitude = self.renderer.eye_safe_amplitude(
+                center_x + math.cos(angle) * self.base_radius,
+                center_y + math.sin(angle) * self.base_radius,
+                amplitude, eye_tips, self.width() * 0.25
+            )
+            
+            radius += total_noise * protected_amplitude
             
             # Add randomness
             random_factor = math.sin(self.time * 2 + i * 0.5) * 5

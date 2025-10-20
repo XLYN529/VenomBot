@@ -17,7 +17,7 @@ class ActiveWindow(QMainWindow):
         self.app_controller = app_controller  # Reference to main app controller
 
         self.setWindowTitle("My App")
-        self.setFixedSize(QSize(400, 300))
+        self.setFixedSize(QSize(400, 400))
         self.setWindowFlags( Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -29,7 +29,7 @@ class ActiveWindow(QMainWindow):
         self.time = 0.0  # Time counter for Perlin noise
         self.time2 = 0.0  # Secondary time counter for layered noise
         self.time3 = 0.0  # Tertiary time counter for complex movement
-        self.base_radius = 100  # Base size of the blob
+        self.base_radius = 150  # Larger base size of the blob
         self.noise_scale = 0.9  # Increased noise intensity for chaos
         self.noise_scale2 = 0.5  # Secondary noise layer
         self.noise_scale3 = 0.1  # Tertiary noise layer for fine details
@@ -109,9 +109,9 @@ class ActiveWindow(QMainWindow):
         # Create a list to store the points
         points = []
         
-        # Calculate center position
-        center_x = 200
-        center_y = 150
+        # Calculate center position (dynamic based on window size)
+        center_x = self.width() / 2
+        center_y = self.height() / 2
         
         # Add state-specific position offsets
         if self.state == 'success':
@@ -145,8 +145,21 @@ class ActiveWindow(QMainWindow):
             # Combine all noise layers for chaotic effect
             total_noise = (noise_value1 * 0.6) + (noise_value2 * 0.3) + (noise_value3 * 0.1)
             
-            # Apply chaotic noise to radius with increased intensity
-            radius += total_noise * 50  # Much larger deformation for chaos
+            # Get eye protection points
+            eye_tips = self.blob_renderer.get_eye_protection_points(self.width(), self.height())
+            protection_radius = self.width() * 0.25  # Larger protection zones
+            
+            
+            # Apply eye protection to reduce deformation near eyes
+            amplitude = 50  # Base deformation intensity
+            protected_amplitude = self.blob_renderer.eye_safe_amplitude(
+                center_x + math.cos(angle) * self.base_radius,
+                center_y + math.sin(angle) * self.base_radius,
+                amplitude, eye_tips, protection_radius
+            )
+            
+            # Apply chaotic noise to radius with eye protection
+            radius += total_noise * protected_amplitude
             
             # Add some randomness to make it even more chaotic
             random_factor = math.sin(self.time * 2 + i * 0.5) * 10
