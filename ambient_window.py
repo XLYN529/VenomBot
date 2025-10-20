@@ -3,7 +3,7 @@ AmbientWindow - Small floating orb that appears in the corner when not actively 
 """
 
 from PySide6.QtCore import Qt, QTimer, QPointF
-from PySide6.QtGui import QPainter, QScreen
+from PySide6.QtGui import QPainter, QScreen, QColor
 from PySide6.QtWidgets import QWidget, QApplication
 from opensimplex import OpenSimplex
 import math
@@ -115,8 +115,12 @@ class AmbientWindow(QWidget):
     def paintEvent(self, event):
         """Draw the ambient orb using the shared renderer"""
         painter = QPainter(self)
+        
         points = self.create_blob_shape()
         self.renderer.render_blob(painter, points, self.state, self.face_pos)
+        
+        # Properly end the painter
+        painter.end()
     
     def keyPressEvent(self, event):
         """Handle keyboard input for testing"""

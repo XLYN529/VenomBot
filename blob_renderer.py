@@ -140,6 +140,9 @@ class BlobRenderer:
         """Main rendering method - draws the complete 3D blob"""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
+        # Update time for animations
+        self.time += 0.01
+        
         # Store state and face position for helper methods
         self.state = state
         self.face_pos = face_pos
@@ -197,36 +200,101 @@ class BlobRenderer:
         painter.drawPath(path)
 
     # --- NEW HELPER METHOD ---
-    def _create_symbiote_eye_path(self, length=120, height=80):
-        """Creates sharp, hooked Venom eye shape with aggressive taper."""
+    # --- Math Samplers ---
+    def upper_inner_point(self, length, height, t, A1=1.0, p1=1.6, s1=0.6, B1=0.06, q1=1.8):
+        x = length * t
+        y = - height * (A1 * (math.sin(math.pi * t) ** p1) * (1 - s1 * t) + B1 * (t ** q1))
+        return x, y
+
+    def upper_outer_point(self, length, height, t, flame_amp=0.035, flame_freq=6, phase=0.0, A2=0.95, p2=1.1, s2=0.25):
+        x = length * t
+        base = A2 * (math.sin(math.pi * t) ** p2) * (1 - s2 * (1 - t))
+        flame = flame_amp * math.sin(flame_freq * math.pi * t + phase) * (1 - t)  # fade to tip
+        y = - height * (base + flame)
+        return x, y
+
+    def lower_outer_point(self, length, height, t, C2=0.45, r2=0.6, p4=1.6, e1=0.15, e2=0.85):
+        x = length * t
+        y = height * (C2 * (math.sin(math.pi * t * r2) ** p4) * (e1 + e2 * t))
+        return x, y
+
+    def lower_inner_point(self, length, height, t, C1=0.35, r1=0.9, p3=1.2, d1=0.25, d2=0.6):
+        x = length * t
+        y = height * (C1 * (math.sin(math.pi * t * r1) ** p3) * (d1 + d2 * t))
+        return x, y
+
+    # --- Catmull-Rom to Cubic Bezier conversion helper ---
+    def catmull_rom_to_beziers(self, pts):
+        """Convert a list of points (tuples) into a list of cubicTo control triples.
+           Returns list of (c1, c2, p) where c1,c2,p are points (x,y)."""
+        beziers = []
+        n = len(pts)
+        if n < 4:
+            # fallback to line segments if too few points
+            for i in range(1, n):
+                beziers.append((pts[i-1], pts[i-1], pts[i]))
+            return beziers
+
+        # For tension = 0.5 (standard Catmull-Rom)
+        for i in range(1, n - 2):
+            p0 = pts[i - 1]
+            p1 = pts[i]
+            p2 = pts[i + 1]
+            p3 = pts[i + 2]
+
+            # control points
+            c1x = p1[0] + (p2[0] - p0[0]) / 6.0
+            c1y = p1[1] + (p2[1] - p0[1]) / 6.0
+            c2x = p2[0] - (p3[0] - p1[0]) / 6.0
+            c2y = p2[1] - (p3[1] - p1[1]) / 6.0
+
+            beziers.append(((c1x, c1y), (c2x, c2y), (p2[0], p2[1])))
+        return beziers
+
+    # --- Build QPainterPath from samplers ---
+    def build_bezier_symbiote_eye(self, length, height):
+        """
+        Construct a Venom-style eye with a heavy lower curve and a sharp upper taper.
+        Uses two cubic Bézier segments with C1 continuity at the tip.
+        """
         p = QPainterPath()
-        steps = 32
+        p.moveTo(0.0, 0.0)
 
-        # start from inner corner
-        p.moveTo(0, 0)
+        # --- Upper lid (flatter) ---
+        c1 = QPointF(length * 0.25, -height * 0.45)
+        c2 = QPointF(length * 0.65, -height * 0.20)
+        end_outer = QPointF(length * 0.88, 0.0)
+        p.cubicTo(c1, c2, end_outer)
 
-        # top arch: aggressive taper toward outer corner
-        for i in range(steps + 1):
-            t = i / steps
-            x = t * length
-            y = -math.sin(t * math.pi * 0.8) ** 1.5 * height * (0.9 - 0.3 * t)
-            p.lineTo(x, y)
+        # --- Hook tip (small flick upward/outward) ---
+        c3 = QPointF(length * 1.30, height * 0.15)
+        c4 = QPointF(length * 0.85, height * 0.45)
+        tip_return = QPointF(length * 0.68, height * 0.60)
+        p.cubicTo(c3, c4, tip_return)
 
-        # outer hook tip
-        p.cubicTo(length * 0.95, -height * 0.4, length * 1.1, height * 0.2, length * 0.7, height * 0.6)
-
-        # bottom claw back inward
-        for i in range(steps, -1, -1):
-            t = i / steps
-            x = t * length
-            y = math.sin(t * math.pi * 0.6) ** 1.5 * height * 0.3 * (0.3 + 0.7 * t)
-            p.lineTo(x, y)
+        # --- Lower lid (bulky belly) ---
+        # Reflect c4 around tip_return for smooth tangent continuity
+        c5 = QPointF(2*tip_return.x() - c4.x(), 2*tip_return.y() - c4.y())
+        c6 = QPointF(length * 0.25, height * 0.65)
+        inner_return = QPointF(0.0, 0.0)
+        p.cubicTo(c5, c6, inner_return)
 
         p.closeSubpath()
         return p
 
+    def draw_debug_controls(self, painter, path, color=QColor(255,0,0,180)):
+        """Stroke path and draw its control points roughly (for debugging)."""
+        painter.save()
+        # outline stroke
+        pen = QPen(color)
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        painter.restore()
+
     def _draw_symbiote_eyes(self, painter):
-        """Draws sharp, hooked Venom-style eyes with solid white fill."""
+        """Draws Venom-style eyes using cubic Bézier curves."""
         painter.save()
         w = painter.window().width()
         h = painter.window().height()
@@ -239,39 +307,44 @@ class BlobRenderer:
         look_x = (self.face_pos[0] - 0.5) * 2.0
         look_y = (self.face_pos[1] - 0.5) * 2.0
         
-        # Scale eye size based on window dimensions
-        eye_length = w * 0.12  # Narrow, vertical
-        eye_height = h * 0.18  # Taller than wide
-        
-        # Create eye paths
-        left_eye = self._create_symbiote_eye_path(eye_length, eye_height)
-        right_eye = self._create_symbiote_eye_path(eye_length, eye_height)
-        
-        # Solid white fill - no transparency
-        painter.setBrush(QBrush(QColor(255, 255, 255, 255)))  # solid white
-        painter.setPen(Qt.PenStyle.NoPen)
+        # Eye dimensions
+        eye_length = w * 0.20
+        eye_height = h * 0.12
         
         # Eye positioning
-        eye_spacing = w * 0.08  # Close together
-        eye_y_offset = -h * 0.05  # Centered vertically
+        eye_spacing = w * 0.2
+        eye_y_offset = -h * 0.05
         
-        # Add face tracking movement
+        # Face tracking movement
         tracking_x = look_x * (w * 0.02)
         tracking_y = look_y * (h * 0.01)
         
-        # Draw Left Eye (with inward rotation)
+        # Create eye path using Bézier curves
+        eye = self.build_bezier_symbiote_eye(eye_length, eye_height)
+        rect = eye.boundingRect()
+        pivot = rect.center()
+        
+        # Solid white fill
+        painter.setBrush(QBrush(QColor(255, 255, 255, 255)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        
+        # Draw Left Eye (rotate around eye's own center so spacing doesn't affect tilt)
         painter.save()
         painter.translate(cx - eye_spacing + tracking_x, cy + eye_y_offset + tracking_y)
-        painter.rotate(-8)  # inward tilt for aggression
-        painter.drawPath(left_eye)
+        painter.translate(pivot)
+        painter.rotate(50)  # inward tilt for aggression
+        painter.translate(-pivot)
+        painter.drawPath(eye)
         painter.restore()
         
-        # Draw Right Eye (mirrored with inward rotation)
+        # Draw Right Eye (mirrored; rotate around the same local pivot)
         painter.save()
         painter.translate(cx + eye_spacing + tracking_x, cy + eye_y_offset + tracking_y)
         painter.scale(-1, 1)  # mirror horizontally
-        painter.rotate(8)     # inward tilt for aggression
-        painter.drawPath(right_eye)
+        painter.translate(pivot)
+        painter.rotate(50)     # inward tilt for aggression
+        painter.translate(-pivot)
+        painter.drawPath(eye)
         painter.restore()
         
         painter.restore()

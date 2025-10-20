@@ -165,11 +165,17 @@ class ActiveWindow(QMainWindow):
         """Draw the blob using the BlobRenderer"""
         painter = QPainter(self)
         
+        # Clear the background first to prevent ghosting
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))  # Transparent background
+        
         # Get the blob shape
         points = self.create_blob_shape()
         
         # Render the blob with all 3D effects
         self.blob_renderer.render_blob(painter, points, self.state, self.face_pos)
+        
+        # Properly end the painter
+        painter.end()
     
     def closeEvent(self, event):
         """Handle closing the active window and returning to ambient mode"""
