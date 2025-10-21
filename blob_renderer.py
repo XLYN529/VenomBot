@@ -31,6 +31,8 @@ class BlobRenderer:
         self.state = 'idle'
         self.face_pos = (0.5, 0.5)
         
+       
+
         # Eye tip positions for blob protection
         self.left_eye_tip_x = 0
         self.left_eye_tip_y = 0
@@ -122,7 +124,7 @@ class BlobRenderer:
 
     def create_main_gradient(self, center, max_distance, highlight_color, mid_light_color, base_color, mid_dark_color, shadow_color):
         """Create the main lighting gradient"""
-        light_center = QPointF(center.x() - max_distance * 0.3, center.y() - max_distance * 0.3)
+        light_center = QPointF(center.x() - max_distance * 0.9, center.y() - max_distance * 0.9)
         main_gradient = QRadialGradient(light_center, max_distance * 1.2)
         
         main_gradient.setColorAt(0.0, highlight_color)    # Bright highlight
@@ -197,26 +199,49 @@ class BlobRenderer:
         # Store state and face position for helper methods
         self.state = state
         self.face_pos = face_pos
-        
-        # Create path from points
-        path = QPainterPath()
-        path.moveTo(points[0])
-        for point in points[1:]:
-            path.lineTo(point)
-        path.closeSubpath()
+
+         # Simulate blob "head tilt" toward the user
+        tilt_x = (self.face_pos[0] - 0.5) * 0.5   # -0.5 to +0.5 range → left/right
+        tilt_y = (self.face_pos[1] - 0.5) * 0.4   # -0.4 to +0.4 range → up/down
+
         
         # Calculate blob center and dimensions
         center_x = sum(point.x() for point in points) / len(points)
         center_y = sum(point.y() for point in points) / len(points)
         center = QPointF(center_x, center_y)
         max_distance = max(math.sqrt((point.x() - center_x)**2 + (point.y() - center_y)**2) for point in points)
+
+        # Apply subtle directional bias so blob leans toward the user
+        biased_points = []
+        for p in points:
+            dx = (p.x() - center_x)
+            dy = (p.y() - center_y)
+            # Shift slightly toward face direction
+            new_x = p.x() + tilt_x * 40.0 * (dy / max_distance)
+            new_y = p.y() + tilt_y * 40.0 * (dx / max_distance)
+            biased_points.append(QPointF(new_x, new_y))
+
+        path = QPainterPath()
+        path.moveTo(biased_points[0])
+        for point in biased_points[1:]:
+            path.lineTo(point)
+        path.closeSubpath()
         
         # Get base color and create variations
         base_color = self.get_state_color(state)
         highlight_color, mid_light_color, mid_dark_color, shadow_color = self.create_color_variations(base_color)
         
         # Create all gradients
-        main_gradient = self.create_main_gradient(center, max_distance, highlight_color, mid_light_color, base_color, mid_dark_color, shadow_color)
+        # Shift lighting toward tilt direction (like a face turning)
+        light_center = QPointF(center.x() - tilt_x * max_distance * 2.2,center.y() - tilt_y * max_distance * 2.2)
+
+        main_gradient = QRadialGradient(light_center, max_distance * 1.2)
+        main_gradient.setColorAt(0.0, highlight_color)
+        main_gradient.setColorAt(0.2, mid_light_color)
+        main_gradient.setColorAt(0.5, base_color)
+        main_gradient.setColorAt(0.8, mid_dark_color)
+        main_gradient.setColorAt(1.0, shadow_color)
+
         rim_gradient = self.create_rim_gradient(center, max_distance)
         specular_gradient = self.create_specular_gradient(center, max_distance)
         secondary_gradient = self.create_secondary_gradient(center, max_distance)
@@ -306,56 +331,53 @@ class BlobRenderer:
         eye_y_offset = -h * 0.05
         
         # Face tracking movement
-        tracking_x = look_x * (w * 0.02)
-        tracking_y = look_y * (h * 0.01)
+        tracking_x = look_x * (w * 0.03)
+        tracking_y = look_y * (h * 0.03)
         
-        # Eye tip positions for blob glue effect
-        t = time.time() * 0.5  # Animation timer
-        left_eye_tip = QPointF(cx - eye_spacing, cy + eye_y_offset)
-        right_eye_tip = QPointF(cx + eye_spacing, cy + eye_y_offset)
+        # --- Time and breathing motion ---
+        t = time.time() * 0.5
+        breath_amplitude = w * 0.006   # how far they move together
+        breath_speed = 2.0              # breathing speed
+        breath_offset = math.sin(t * breath_speed) * breath_amplitude
+
+        # --- Shared blob "glue" noise offset ---
+        shared_noise_x = self.noise_gen.noise2(t * 0.3, 10.0) * 8.0
+        shared_noise_y = self.noise_gen.noise2(t * 0.3, 20.0) * 8.0
+        shared_offset = (shared_noise_x, shared_noise_y)
         
-        # Sticky offsets (blob glue effect)
-        left_offset = self.get_eye_offset(left_eye_tip, 0.01, 8.0, t)
-        right_offset = self.get_eye_offset(right_eye_tip, 0.01, 8.0, t)
-        
-        # Create eye path using Bézier curves
+        # --- Build eye path ---
         eye = self.build_bezier_symbiote_eye(eye_length, eye_height)
         rect = eye.boundingRect()
         pivot = rect.center()
         
-        # Solid white fill
+        # Paint settings
         painter.setBrush(QBrush(QColor(255, 255, 255, 255)))
         painter.setPen(Qt.PenStyle.NoPen)
-        
-        # Draw Left Eye (rotate around eye's own center so spacing doesn't affect tilt)
+
+        # Shared scale (breathing size pulse)
+        scale_factor = 1.0 + math.sin(t * 2.0) * 0.005
+
+        # --- LEFT EYE ---
         painter.save()
-        painter.translate(cx - eye_spacing + tracking_x + left_offset[0], 
-                         cy + eye_y_offset + tracking_y + left_offset[1])
+        painter.translate(cx - eye_spacing + tracking_x - breath_offset + shared_offset[0],
+                        cy + eye_y_offset + tracking_y + shared_offset[1])
         painter.translate(pivot)
-        painter.rotate(50)  # inward tilt for aggression
+        painter.rotate(50)  # inward tilt
         painter.translate(-pivot)
-        
-        # Subtle breathing motion
-        scale_factor = 1.0 + math.sin(t * 2.0) * 0.02
         painter.scale(scale_factor, scale_factor)
-        
         painter.drawPath(eye)
         painter.restore()
-        
-        # Draw Right Eye (mirrored; rotate around the same local pivot)
+
+        # --- RIGHT EYE ---
         painter.save()
-        painter.translate(cx + eye_spacing + tracking_x + right_offset[0], 
-                         cy + eye_y_offset + tracking_y + right_offset[1])
+        painter.translate(cx + eye_spacing + tracking_x + breath_offset + shared_offset[0],
+                        cy + eye_y_offset + tracking_y + shared_offset[1])
         painter.scale(-1, 1)  # mirror horizontally
         painter.translate(pivot)
-        painter.rotate(50)     # inward tilt for aggression
+        painter.rotate(50)  # inward tilt
         painter.translate(-pivot)
-        
-        # Subtle breathing motion
-        scale_factor = 1.0 + math.sin(t * 2.0) * 0.02
         painter.scale(scale_factor, scale_factor)
-        
         painter.drawPath(eye)
         painter.restore()
-        
+
         painter.restore()
